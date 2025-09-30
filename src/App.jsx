@@ -313,6 +313,8 @@ export default function App() {
   const currentTotal = rows.reduce((acc, r) => acc + r.currentValue, 0);
   const targetTotal = rows.reduce((acc, r) => acc + r.targetValue, 0);
   const gainTotal = targetTotal - currentTotal;
+  // Overall portfolio return percentage based on current and target totals.
+  const portfolioReturnPct = currentTotal > 0 ? ((targetTotal - currentTotal) / currentTotal) * 100 : null;
 
   // Data for the bar chart.  Each bar compares current vs target value
   // for a particular ticker.  Filtering out rows with no ticker or
@@ -352,14 +354,9 @@ export default function App() {
         <div className="card">
           <div className="flex justify-between items-center mb-4">
             <h2 className="font-semibold text-lg">Assets</h2>
-            <div className="flex gap-2">
-              <button onClick={addRow} aria-label="Add asset">
-                <Plus size={16} className="inline mr-1" /> Add
-              </button>
-              <button onClick={fetchAllPrices} aria-label="Fetch all prices">
-                Fetch Prices
-              </button>
-            </div>
+            <button onClick={addRow} aria-label="Add asset">
+              <Plus size={16} className="inline mr-1" /> Add
+            </button>
           </div>
           <table>
             <thead>
@@ -425,6 +422,13 @@ export default function App() {
               ))}
             </tbody>
           </table>
+
+          {/* Fetch all prices button below the table */}
+          <div className="mt-4 flex justify-end">
+            <button onClick={fetchAllPrices} aria-label="Fetch all prices">
+              Fetch Prices
+            </button>
+          </div>
         </div>
         {/* Right side: summary and chart */}
         <div className="card">
@@ -442,6 +446,16 @@ export default function App() {
                 style={{ color: gainTotal >= 0 ? '#16a34a' : '#dc2626' }}
               >
                 {gainTotal >= 0 ? '+' : ''}${gainTotal.toFixed(2)}
+              </span>
+            </p>
+            <p>
+              <strong>Average Portfolio Return %:</strong>{' '}
+              <span
+                style={{ color: portfolioReturnPct != null && portfolioReturnPct >= 0 ? '#16a34a' : '#dc2626' }}
+              >
+                {portfolioReturnPct != null
+                  ? `${portfolioReturnPct >= 0 ? '+' : ''}${portfolioReturnPct.toFixed(2)}%`
+                  : '—'}
               </span>
             </p>
           </div>
