@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, X } from 'lucide-react';
-import { Analytics } from "@vercel/analytics/react";
-import { SpeedInsights } from "@vercel/speed-insights/react";
+import { Analytics } from '@vercel/analytics/react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import {
   BarChart,
   Bar,
@@ -149,9 +149,13 @@ export default function App() {
     {
       id: genId(),
       ticker: '',
-      shares: 0,
+      // Initialise shares and targetPrice as empty strings rather than
+      // zero so that the input fields do not display a sticky 0.  The
+      // numeric conversion happens when computing rows below.  Users can
+      // simply type without needing to delete a default zero.
+      shares: '',
       currentPrice: null,
-      targetPrice: 0,
+      targetPrice: '',
       loading: false,
       error: null
     }
@@ -196,22 +200,30 @@ export default function App() {
   };
 
   // Update share count for a row.  Negative values are not allowed.
-  const updateShares = (id, shares) => {
-    const parsed = parseFloat(shares);
+  const updateShares = (id, value) => {
+    // Accept the raw value from the input so that empty strings remain
+    // blank.  Negative numbers are clamped to zero but preserved as
+    // strings.  Parsing occurs later when computing derived values.
+    let newVal = value;
+    const num = parseFloat(value);
+    if (!isNaN(num) && num < 0) {
+      newVal = '0';
+    }
     setAssets(prev =>
-      prev.map(asset =>
-        asset.id === id ? { ...asset, shares: isNaN(parsed) ? 0 : parsed } : asset
-      )
+      prev.map(asset => (asset.id === id ? { ...asset, shares: newVal } : asset))
     );
   };
 
   // Update target price for a row.  Negative values are not allowed.
-  const updateTarget = (id, price) => {
-    const parsed = parseFloat(price);
+  const updateTarget = (id, value) => {
+    // Similar to shares, store the raw string.  Clamp negatives to zero.
+    let newVal = value;
+    const num = parseFloat(value);
+    if (!isNaN(num) && num < 0) {
+      newVal = '0';
+    }
     setAssets(prev =>
-      prev.map(asset =>
-        asset.id === id ? { ...asset, targetPrice: isNaN(parsed) ? 0 : parsed } : asset
-      )
+      prev.map(asset => (asset.id === id ? { ...asset, targetPrice: newVal } : asset))
     );
   };
 
@@ -224,9 +236,9 @@ export default function App() {
       {
         id: genId(),
         ticker: '',
-        shares: 0,
+        shares: '',
         currentPrice: null,
-        targetPrice: 0,
+        targetPrice: '',
         loading: false,
         error: null
       }
@@ -238,13 +250,16 @@ export default function App() {
   const removeRow = id => {
     setAssets(prev => {
       if (prev.length === 1) {
+        // Reset the single remaining row to blank values rather than
+        // removing it entirely.  Use empty strings for shares and
+        // targetPrice to avoid sticky zeros on the inputs.
         return [
           {
             id: prev[0].id,
             ticker: '',
-            shares: 0,
+            shares: '',
             currentPrice: null,
-            targetPrice: 0,
+            targetPrice: '',
             loading: false,
             error: null
           }
@@ -300,8 +315,14 @@ export default function App() {
   // target values multiply shares by price; if price is unavailable
   // they are zero.  Totals sum across all rows.
   const rows = assets.map(asset => {
-    const current = (asset.shares || 0) * (asset.currentPrice || 0);
-    const target = (asset.shares || 0) * (asset.targetPrice || 0);
+    // Convert share and target price strings to numbers.  Treat empty
+    // strings and invalid values as zero.  Clamp negative numbers to zero.
+    let shareNum = parseFloat(asset.shares);
+    if (isNaN(shareNum) || shareNum < 0) shareNum = 0;
+    let targetNum = parseFloat(asset.targetPrice);
+    if (isNaN(targetNum) || targetNum < 0) targetNum = 0;
+    const current = shareNum * (asset.currentPrice || 0);
+    const target = shareNum * targetNum;
     const gain = target - current;
     const returnPct = current > 0 ? (gain / current) * 100 : null;
     return {
@@ -360,8 +381,9 @@ export default function App() {
               <Plus size={16} className="inline mr-1" /> Add
             </button>
           </div>
-          <table>
-            <thead>
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead>
               <tr>
                 <th>Ticker</th>
                 <th>Shares</th>
@@ -422,8 +444,9 @@ export default function App() {
                   </td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
 
           {/* Fetch all prices button below the table */}
           <div className="mt-4 flex justify-end">
@@ -463,7 +486,7 @@ export default function App() {
           </div>
           {chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={chartData} margin={{ top: 20, right: 20, left: 0, bottom: 5 }}>
+              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 40, bottom: 5 }}>
                 <XAxis dataKey="name" />
                 {/* Left Y axis for dollar values */}
                 <YAxis yAxisId="left" tickFormatter={v => `$${v}`} />
@@ -498,55 +521,60 @@ export default function App() {
         {rows.length === 0 ? (
           <p className="text-gray-500 italic">No assets entered.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Asset</th>
-                <th>Shares</th>
-                <th>Current Price</th>
-                <th>Current Value</th>
-                <th>Target Price</th>
-                <th>Target Value</th>
-                <th>Gain/Loss</th>
-                <th>Return %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(row => (
-                <tr key={row.id}>
-                  <td>{row.ticker || '—'}</td>
-                  <td>{row.shares}</td>
-                  <td>
-                    {row.currentPrice != null
-                      ? `$${row.currentPrice.toFixed(2)}`
-                      : '—'}
-                  </td>
-                  <td>
-                    {row.currentValue
-                      ? `$${row.currentValue.toFixed(2)}`
-                      : '—'}
-                  </td>
-                  <td>{row.targetPrice ? `$${row.targetPrice.toFixed(2)}` : '—'}</td>
-                    
-                  <td>
-                    {row.targetValue
-                      ? `$${row.targetValue.toFixed(2)}`
-                      : '—'}
-                  </td>
-                  <td>
-                    {row.gain
-                      ? `${row.gain >= 0 ? '+' : ''}$${row.gain.toFixed(2)}`
-                      : '—'}
-                  </td>
-                  <td>
-                    {row.returnPct != null
-                      ? `${row.returnPct >= 0 ? '+' : ''}${row.returnPct.toFixed(2)}%`
-                      : '—'}
-                  </td>
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>Shares</th>
+                  <th>Current Price</th>
+                  <th>Current Value</th>
+                  <th>Target Price</th>
+                  <th>Target Value</th>
+                  <th>Gain/Loss</th>
+                  <th>Return %</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map(row => (
+                  <tr key={row.id}>
+                    <td>{row.ticker || '—'}</td>
+                    <td>{row.shares}</td>
+                    <td>
+                      {row.currentPrice != null
+                        ? `$${row.currentPrice.toFixed(2)}`
+                        : '—'}
+                    </td>
+                    <td>
+                      {row.currentValue
+                        ? `$${row.currentValue.toFixed(2)}`
+                        : '—'}
+                    </td>
+                    <td>
+                      {row.targetPrice
+                        ? `$${parseFloat(row.targetPrice).toFixed(2)}`
+                        : '—'}
+                    </td>
+                    <td>
+                      {row.targetValue
+                        ? `$${row.targetValue.toFixed(2)}`
+                        : '—'}
+                    </td>
+                    <td>
+                      {row.gain
+                        ? `${row.gain >= 0 ? '+' : ''}$${row.gain.toFixed(2)}`
+                        : '—'}
+                    </td>
+                    <td>
+                      {row.returnPct != null
+                        ? `${row.returnPct >= 0 ? '+' : ''}${row.returnPct.toFixed(2)}%`
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
       {/* Vercel Analytics and Speed Insights */}
