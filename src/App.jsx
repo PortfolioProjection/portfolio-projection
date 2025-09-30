@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, X } from 'lucide-react';
+import { Analytics } from '@vercel/analytics/next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import {
   BarChart,
   Bar,
@@ -547,6 +549,9 @@ export default function App() {
           </table>
         )}
       </div>
+      {/* Vercel Analytics and Speed Insights */}
+      <SpeedInsights />
+      <Analytics />
     </div>
   );
 }
