@@ -10,49 +10,123 @@ import {
   Legend
 } from 'recharts';
 
-// Helper to fetch the current price of a stock ticker.  This first
-// attempts to query Yahoo Finance via a CORS proxy and falls back to
-// the publicly available Stooq CSV service if Yahoo fails.  On
-// success it returns a number; otherwise it returns null.
+/*
+ * Helper to fetch the current price of a stock ticker.
+ *
+ * This helper tries a few different data sources in order to return a
+ * reliable price without requiring API keys.  The primary source is
+ * Yahoo Finance's chart API (v8) which provides current and recent
+ * price information without authentication.  Because browsers enforce
+ * cross‑origin restrictions, the request is routed through the
+ * allorigins proxy which adds the appropriate CORS headers.  If the
+ * Yahoo call fails or the returned data doesn't include a valid price
+ * (which can happen for delisted or ill‑formed tickers), the helper
+ * falls back to the Stooq CSV service.  Stooq uses a different
+ * ticker format: U.S. equities are suffixed with `.us` and many
+ * cryptocurrencies use a `.v` suffix (e.g. `btc.v`).  See
+ * https://stooq.pl/ for details on their naming conventions.
+ *
+ * On success this function resolves to a number representing the last
+ * traded price.  If no price can be determined it resolves to null.
+ */
 async function fetchCurrentPrice(ticker) {
-  const cors = 'https://corsproxy.io/?';
-  // Attempt Yahoo Finance quote endpoint
+  if (!ticker) return null;
+  // CORS proxy base.  We route all outbound requests through this
+  // proxy so that the target server's response includes permissive
+  // CORS headers.  allorigins returns the raw contents of any URL
+  // when prefaced with `https://api.allorigins.win/raw?url=`.
+  const proxyBase = 'https://api.allorigins.win/raw?url=';
+
+  // First try Yahoo Finance's v7 quote endpoint.  This endpoint
+  // returns a `quoteResponse` object with a `regularMarketPrice`
+  // property.  Using the quote API is more reliable for the
+  // latest price than the chart API because it is less likely to
+  // report null or outdated values.  We URL‑encode the entire
+  // endpoint when passing it through the proxy.
   try {
-    const url = `${cors}https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(
+    const quoteEndpoint = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(
       ticker
     )}`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      const result = data?.quoteResponse?.result?.[0];
-      const price = result?.regularMarketPrice;
+    const quoteRes = await fetch(
+      `${proxyBase}${encodeURIComponent(quoteEndpoint)}`
+    );
+    if (quoteRes.ok) {
+      const quoteData = await quoteRes.json();
+      const result = quoteData?.quoteResponse?.result?.[0] ?? {};
+      const price =
+        result.regularMarketPrice ??
+        result.regularMarketPreviousClose ??
+        null;
       if (typeof price === 'number' && !isNaN(price)) {
         return price;
       }
     }
-  } catch (e) {
+  } catch {
     // ignore and fall back
   }
-  // Fallback to Stooq CSV; ticker must be in the .us format for U.S. equities
+
+  // If the quote endpoint returns no data, fall back to Yahoo
+  // Finance's v8 chart API.  The chart API includes price meta
+  // information, but occasionally returns null for the current
+  // price.  We request a 1‑day range with a 1‑day interval to keep
+  // the payload small.
   try {
-    const normalized = ticker.replace(/\./g, '').toLowerCase();
-    const url = `${cors}https://stooq.com/q/l/?s=${normalized}.us&i=d`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const text = await res.text();
-      const lines = text.trim().split('\n');
+    const chartEndpoint = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+      ticker
+    )}?range=1d&interval=1d`;
+    const chartRes = await fetch(
+      `${proxyBase}${encodeURIComponent(chartEndpoint)}`
+    );
+    if (chartRes.ok) {
+      const chartData = await chartRes.json();
+      const meta = chartData?.chart?.result?.[0]?.meta ?? {};
+      const price =
+        meta.regularMarketPrice ?? meta.chartPreviousClose ?? null;
+      if (typeof price === 'number' && !isNaN(price)) {
+        return price;
+      }
+    }
+  } catch {
+    // ignore and continue to fallback
+  }
+
+  // Final fallback: query the Stooq CSV service.  Stooq uses
+  // different suffix conventions.  If the ticker consists of
+  // alphabetic characters only (e.g. AAPL), append `.us`.  If it
+  // ends with `-USD` (common for cryptocurrencies), replace that
+  // suffix with `.v`.  The CSV returned by Stooq includes the
+  // closing price in the seventh column.  See stooq.pl for details.
+  let stooqSymbol = ticker.toLowerCase();
+  if (/^[a-z]+$/i.test(stooqSymbol)) {
+    stooqSymbol = `${stooqSymbol}.us`;
+  } else if (stooqSymbol.endsWith('-usd')) {
+    stooqSymbol = stooqSymbol.replace(/-usd$/, '.v');
+  }
+  try {
+    const stooqUrl = `https://stooq.pl/q/l/?s=${encodeURIComponent(
+      stooqSymbol
+    )}&f=sd2t2ohlcvn&h&e=csv`;
+    const stooqRes = await fetch(
+      `${proxyBase}${encodeURIComponent(stooqUrl)}`
+    );
+    if (stooqRes.ok) {
+      const csv = await stooqRes.text();
+      const lines = csv.trim().split(/\r?\n/);
       if (lines.length > 1) {
-        const row = lines[1].split(',');
-        // Stooq CSV: Symbol,Date,Open,High,Low,Close,Volume
-        const closePrice = parseFloat(row[3]);
-        if (!isNaN(closePrice)) {
-          return closePrice;
+        const parts = lines[1].split(',');
+        // fields: Symbol,Date,Time,Open,High,Low,Close,Volume,Name
+        const close = parseFloat(parts[6]);
+        if (!isNaN(close)) {
+          return close;
         }
       }
     }
-  } catch (e) {
-    // ignore
+  } catch {
+    // final fallback fails silently
   }
+
+  // If all attempts fail, return null to indicate that no price
+  // could be retrieved.
   return null;
 }
 
