@@ -155,33 +155,42 @@ export default function App() {
     }
   ]);
 
+  // Whether dark mode is enabled.  Toggling this updates a CSS class
+  // on the <body> element via the effect below.  Default is light mode.
+  const [darkMode, setDarkMode] = useState(false);
+
+  // Apply or remove the 'dark' class on the document body whenever
+  // darkMode changes.  This allows CSS rules to switch theme colors
+  // based on the presence of the .dark class.
+  useEffect(() => {
+    if (darkMode) {
+      document.body.classList.add('dark');
+    } else {
+      document.body.classList.remove('dark');
+    }
+  }, [darkMode]);
+
   // When a ticker is changed, fetch the latest price.  The price
   // field is non‑editable and updates automatically.  If fetching
   // fails, an error message is stored on the row.
   const updateTicker = (id, ticker) => {
+    // Update only the ticker and reset any previously fetched price.
+    // We no longer fetch automatically here; users trigger price
+    // retrieval via the "Fetch Prices" button.
     setAssets(prev =>
       prev.map(asset =>
         asset.id === id
-          ? { ...asset, ticker, currentPrice: null, loading: true, error: null }
+          ? {
+              ...asset,
+              ticker,
+              currentPrice: null,
+              loading: false,
+              error: null
+            }
           : asset
       )
     );
-    if (!ticker) return;
-    fetchCurrentPrice(ticker).then(price => {
-      setAssets(prev =>
-        prev.map(asset => {
-          if (asset.id === id) {
-            return {
-              ...asset,
-              currentPrice: price,
-              loading: false,
-              error: price == null ? 'Price unavailable' : null
-            };
-          }
-          return asset;
-        })
-      );
-    });
+    return;
   };
 
   // Update share count for a row.  Negative values are not allowed.
@@ -243,13 +252,63 @@ export default function App() {
     });
   };
 
+  // Fetch current prices for all entered tickers.  This function sets
+  // the loading state for each row with a ticker, then performs all
+  // price fetches in parallel.  Once complete it updates each row
+  // with the retrieved price (or an error if unavailable).
+  const fetchAllPrices = async () => {
+    // Mark all tickers as loading
+    setAssets(prev =>
+      prev.map(asset =>
+        asset.ticker
+          ? { ...asset, loading: true, error: null, currentPrice: null }
+          : asset
+      )
+    );
+    // Fetch prices concurrently
+    const results = await Promise.all(
+      assets.map(async asset => {
+        if (!asset.ticker) {
+          return { id: asset.id, price: null, error: null };
+        }
+        const price = await fetchCurrentPrice(asset.ticker);
+        return {
+          id: asset.id,
+          price,
+          error: price == null ? 'Price unavailable' : null
+        };
+      })
+    );
+    // Update state with fetched prices
+    setAssets(prev =>
+      prev.map(asset => {
+        const res = results.find(r => r.id === asset.id);
+        if (!res || !asset.ticker) return { ...asset, loading: false };
+        return {
+          ...asset,
+          currentPrice: res.price,
+          loading: false,
+          error: res.error
+        };
+      })
+    );
+  };
+
   // Derived data: compute per‑row values and totals.  The current and
   // target values multiply shares by price; if price is unavailable
   // they are zero.  Totals sum across all rows.
   const rows = assets.map(asset => {
     const current = (asset.shares || 0) * (asset.currentPrice || 0);
     const target = (asset.shares || 0) * (asset.targetPrice || 0);
-    return { ...asset, currentValue: current, targetValue: target, gain: target - current };
+    const gain = target - current;
+    const returnPct = current > 0 ? (gain / current) * 100 : null;
+    return {
+      ...asset,
+      currentValue: current,
+      targetValue: target,
+      gain,
+      returnPct
+    };
   });
   const currentTotal = rows.reduce((acc, r) => acc + r.currentValue, 0);
   const targetTotal = rows.reduce((acc, r) => acc + r.targetValue, 0);
@@ -263,16 +322,29 @@ export default function App() {
     .map(r => ({
       name: r.ticker.toUpperCase(),
       Current: parseFloat(r.currentValue.toFixed(2)),
-      Target: parseFloat(r.targetValue.toFixed(2))
+      Target: parseFloat(r.targetValue.toFixed(2)),
+      ReturnPct:
+        r.returnPct != null
+          ? parseFloat(r.returnPct.toFixed(2))
+          : null
     }));
 
   return (
     <div className="container">
       <header className="mb-6">
-        <h1 className="title">Portfolio Projection</h1>
+        <div className="flex justify-between items-center">
+          <h1 className="title">Portfolio Projection</h1>
+          <button
+            onClick={() => setDarkMode(prev => !prev)}
+            className="ml-4"
+            aria-label="Toggle dark mode"
+          >
+            {darkMode ? 'Light Mode' : 'Dark Mode'}
+          </button>
+        </div>
         <p className="text-sm text-gray-600">
-          Enter a stock ticker and number of shares. The app fetches the current
-          price and allows you to set a target price to see potential returns.
+          Enter a stock ticker, number of shares and a target price. Once you&apos;re ready, click
+          &quot;Fetch Prices&quot; to retrieve the latest data and see your potential returns.
         </p>
       </header>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -280,9 +352,14 @@ export default function App() {
         <div className="card">
           <div className="flex justify-between items-center mb-4">
             <h2 className="font-semibold text-lg">Assets</h2>
-            <button onClick={addRow} aria-label="Add asset">
-              <Plus size={16} className="inline mr-1" /> Add
-            </button>
+            <div className="flex gap-2">
+              <button onClick={addRow} aria-label="Add asset">
+                <Plus size={16} className="inline mr-1" /> Add
+              </button>
+              <button onClick={fetchAllPrices} aria-label="Fetch all prices">
+                Fetch Prices
+              </button>
+            </div>
           </div>
           <table>
             <thead>
@@ -372,13 +449,26 @@ export default function App() {
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={chartData} margin={{ top: 20, right: 20, left: 0, bottom: 5 }}>
                 <XAxis dataKey="name" />
-                <YAxis tickFormatter={v => `$${v}`} />
+                {/* Left Y axis for dollar values */}
+                <YAxis yAxisId="left" tickFormatter={v => `$${v}`} />
+                {/* Right Y axis for percentage returns */}
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  tickFormatter={v => (v != null ? `${v}%` : '')}
+                />
                 <Tooltip
-                  formatter={(value) => `$${parseFloat(value).toLocaleString()}`}
+                  formatter={(value, name) => {
+                    if (name === 'ReturnPct') {
+                      return [`${value}%`, 'Return %'];
+                    }
+                    return [`$${parseFloat(value).toLocaleString()}`, name];
+                  }}
                 />
                 <Legend />
-                <Bar dataKey="Current" fill="#60a5fa" />
-                <Bar dataKey="Target" fill="#6ee7b7" />
+                <Bar yAxisId="left" dataKey="Current" fill="#60a5fa" />
+                <Bar yAxisId="left" dataKey="Target" fill="#6ee7b7" />
+                <Bar yAxisId="right" dataKey="ReturnPct" fill="#fbbf24" />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -402,6 +492,7 @@ export default function App() {
                 <th>Target Price</th>
                 <th>Target Value</th>
                 <th>Gain/Loss</th>
+                <th>Return %</th>
               </tr>
             </thead>
             <tbody>
@@ -429,6 +520,11 @@ export default function App() {
                   <td>
                     {row.gain
                       ? `${row.gain >= 0 ? '+' : ''}$${row.gain.toFixed(2)}`
+                      : '—'}
+                  </td>
+                  <td>
+                    {row.returnPct != null
+                      ? `${row.returnPct >= 0 ? '+' : ''}${row.returnPct.toFixed(2)}%`
                       : '—'}
                   </td>
                 </tr>
